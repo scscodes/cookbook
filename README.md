@@ -18,6 +18,9 @@ A **Watermark-based Incremental Sync** architecture that:
 - **Runtime Flexibility**: switch between SQLite (Edge/POC) and PostgreSQL (Production) via `.env`.
 
 ## Architecture
+
+For a detailed breakdown of the synchronization process and data flow, see [Synchronization Architecture](docs/sync_architecture.md).
+
 ```
 app/
 ├── core/                  # Config & Database connection
