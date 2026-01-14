@@ -13,7 +13,8 @@ class MockExternalClient:
         self,
         entity_type: str,
         modified_since: datetime,
-        batch_size: int = 100
+        batch_size: int = 100,
+        params: Dict | None = None,
     ) -> List[Dict]:
         """
         Simulate fetching records modified since a given timestamp.
@@ -30,7 +31,9 @@ class MockExternalClient:
 
         records = []
         for _ in range(count):
-            records.append(self._generate_record(entity_type))
+            record = self._generate_record(entity_type)
+            if self._matches_filters(record, params):
+                records.append(record)
             
         return records
 
@@ -93,3 +96,26 @@ class MockExternalClient:
             })
             
         return base
+
+    def _matches_filters(self, record: Dict, params: Dict | None) -> bool:
+        """
+        Apply simple filters for demo purposes (e.g., by state or priority).
+        """
+        if not params:
+            return True
+
+        filters = params.get("filters") or {}
+
+        # Filter by states
+        states = filters.get("states")
+        if states and record.get("state") not in states:
+            return False
+
+        # Filter by priority upper bound (incidents only)
+        priority_max = filters.get("priority_max")
+        if priority_max is not None:
+            priority = record.get("priority")
+            if priority is not None and priority > priority_max:
+                return False
+
+        return True

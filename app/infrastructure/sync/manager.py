@@ -109,6 +109,7 @@ def sync_entity(
     entity_type: str,
     external_api_client: Any,
     batch_size: int = 100,
+    params: Optional[dict] = None,
 ) -> int:
     """
     Perform incremental sync for a single entity type.
@@ -152,6 +153,7 @@ def sync_entity(
                 entity_type=entity_type,
                 modified_since=modified_since,
                 batch_size=batch_size,
+                params=params,
             )
 
             if records:

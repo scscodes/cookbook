@@ -56,9 +56,8 @@ graph LR
 ```
 
 ## Detailed Workflows
-
 ### 1. Synchronization Process
-This diagram details the "Write Path": how data moves from the External API into the Local Database.
+This diagram details the "Write Path": how data moves from the External API into the Local Database. Cadences can differ per entity (incidents now have hot/warm buckets).
 
 ```mermaid
 sequenceDiagram
@@ -90,6 +89,42 @@ sequenceDiagram
 
     Note right of M: 4. Completion
     M->>W: Release Lock & Update Watermark (Now)
+```
+
+### 1.a Incident Cadence Split (Hot vs Warm)
+The registry now supports multiple incident jobs with different cadences and filters.
+
+```mermaid
+graph TD
+    subgraph SchedulerLayer
+        HotJob["Hot Incidents (5m)"]
+        WarmJob["Warm Incidents (60m)"]
+    end
+
+    subgraph Registry["Job Registry"]
+        HotDef["entity=incident\nfilters=active/high-priority"]
+        WarmDef["entity=incident\nfilters=resolved/closed"]
+    end
+
+    subgraph ManagerLayer
+        Incremental["Incremental Sync"]
+    end
+
+    subgraph ExternalAPI
+        Ext["External ITSM API"]
+    end
+
+    subgraph Database
+        IncTable["Incidents Table"]
+    end
+
+    HotJob --> HotDef
+    WarmJob --> WarmDef
+    HotDef --> Incremental
+    WarmDef --> Incremental
+    Incremental --> Ext
+    Ext --> Incremental
+    Incremental --> IncTable
 ```
 
 ### 2. Read / Consumption Process
@@ -153,8 +188,9 @@ Local mirrors of external data.
 ## Component Breakdown
 
 ### 1. Sync Scheduler (`app/infrastructure/sync/scheduler.py`)
-Responsible for orchestration. It uses `APScheduler` to trigger jobs on defined intervals:
--   **Incidents**: Every 5 minutes.
+Responsible for orchestration. It uses `APScheduler` to trigger jobs defined in the registry:
+-   **Incidents (Hot)**: Every 5 minutes (active/high-priority via filters)
+-   **Incidents (Warm)**: Every 60 minutes (resolved/closed via filters)
 -   **Changes**: Every 15 minutes.
 -   **Events**: Every 30 minutes.
 -   **Reconciliation**: Weekly (Sunday 2 AM) to catch deleted records.

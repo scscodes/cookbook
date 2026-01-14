@@ -9,12 +9,9 @@ import logging
 from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.interval import IntervalTrigger
 
-from app.infrastructure.sync.manager import (
-    reconcile_deletes,
-    sync_entity,
-)
+from app.infrastructure.sync.jobs import REGISTERED_JOBS
+from app.infrastructure.sync.manager import reconcile_deletes, sync_entity
 
 logger = logging.getLogger(__name__)
 
@@ -50,48 +47,20 @@ class SyncScheduler:
         Call this during application startup (FastAPI lifespan event).
         """
         logger.info("Starting sync scheduler")
+        for job_def in REGISTERED_JOBS:
+            job_func = self._get_job_function(job_def.job_type)
+            job_id = f"{job_def.job_type}_{job_def.entity_type}"
 
-        # Incidents: Sync every 5 minutes
-        self.scheduler.add_job(
-            func=self._sync_incidents,
-            trigger=IntervalTrigger(minutes=5),
-            id="sync_incidents",
-            name="Sync Incidents",
-            replace_existing=True,
-            max_instances=1,  # Prevent concurrent runs
-        )
-
-        # Changes: Sync every 15 minutes
-        self.scheduler.add_job(
-            func=self._sync_changes,
-            trigger=IntervalTrigger(minutes=15),
-            id="sync_changes",
-            name="Sync Changes",
-            replace_existing=True,
-            max_instances=1,
-        )
-
-        # Events: Sync every 30 minutes
-        self.scheduler.add_job(
-            func=self._sync_events,
-            trigger=IntervalTrigger(minutes=30),
-            id="sync_events",
-            name="Sync Events",
-            replace_existing=True,
-            max_instances=1,
-        )
-
-        # Delete reconciliation: Weekly on Sunday at 2 AM
-        self.scheduler.add_job(
-            func=self._reconcile_all_deletes,
-            trigger="cron",
-            day_of_week="sun",
-            hour=2,
-            minute=0,
-            id="reconcile_deletes",
-            name="Reconcile Deleted Records",
-            replace_existing=True,
-        )
+            self.scheduler.add_job(
+                func=job_func,
+                trigger=job_def.trigger,
+                args=[job_def.entity_type, job_def.params],
+                id=job_id,
+                name=job_def.name,
+                replace_existing=True,
+                max_instances=1,
+            )
+            logger.info(f"Registered job: {job_def.name} ({job_def.trigger})")
 
         self.scheduler.start()
         logger.info("Sync scheduler started successfully")
@@ -108,33 +77,21 @@ class SyncScheduler:
         logger.info("Shutting down sync scheduler")
         self.scheduler.shutdown(wait=wait)
 
-    def _sync_incidents(self) -> None:
-        """Sync incidents from external API."""
-        self._run_sync("incident")
+    def _get_job_function(self, job_type: str):
+        """Map job type to handler."""
+        if job_type == "reconcile":
+            return self._run_reconciliation
+        return self._run_incremental_sync
 
-    def _sync_changes(self) -> None:
-        """Sync changes from external API."""
-        self._run_sync("change")
-
-    def _sync_events(self) -> None:
-        """Sync events from external API."""
-        self._run_sync("event")
-
-    def _run_sync(self, entity_type: str) -> None:
-        """
-        Execute sync for a single entity type.
-
-        Handles database session lifecycle and error logging.
-
-        Args:
-            entity_type: Entity to sync (incident, change, event)
-        """
+    def _run_incremental_sync(self, entity_type: str, params: dict | None = None) -> None:
+        """Generic handler for incremental syncs."""
         db = self.db_session_factory()
         try:
             records_synced = sync_entity(
                 db=db,
                 entity_type=entity_type,
                 external_api_client=self.external_api_client,
+                params=params,
             )
             logger.info(f"Sync completed for {entity_type}: {records_synced} records")
         except Exception as e:
@@ -142,22 +99,24 @@ class SyncScheduler:
         finally:
             db.close()
 
-    def _reconcile_all_deletes(self) -> None:
-        """Reconcile soft-deleted records for all entity types."""
+    def _run_reconciliation(self, entity_type: str, params: dict | None = None) -> None:
+        """Generic handler for reconciliation jobs."""
+        targets = ["incident", "change", "event"] if entity_type == "all" else [entity_type]
+
         db = self.db_session_factory()
         try:
-            for entity_type in ["incident", "change", "event"]:
+            for target in targets:
                 deleted_count = reconcile_deletes(
                     db=db,
-                    entity_type=entity_type,
+                    entity_type=target,
                     external_api_client=self.external_api_client,
                 )
                 logger.info(
-                    f"Delete reconciliation for {entity_type}: "
+                    f"Delete reconciliation for {target}: "
                     f"{deleted_count} records marked deleted"
                 )
         except Exception as e:
-            logger.error(f"Delete reconciliation failed: {e}", exc_info=True)
+            logger.error("Delete reconciliation failed", exc_info=True)
         finally:
             db.close()
 
